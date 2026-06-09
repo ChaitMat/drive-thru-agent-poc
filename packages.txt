@@ -1,4 +1,1 @@
-# apt packages installed by Streamlit Community Cloud before pip.
-# piper-tts 1.4.2 bundles espeak-ng in its wheel, but installing the system
-# package as well is cheap insurance for phonemization on the Debian image.
 espeak-ng
