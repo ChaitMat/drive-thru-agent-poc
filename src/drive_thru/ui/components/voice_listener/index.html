@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; padding: 0; font-family: -apple-system, system-ui, sans-serif; }
+  #status {
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 14px;
+    line-height: 1.3;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  #status.listening {
+    background: rgba(0, 200, 100, 0.12);
+    border: 1px solid rgba(0, 200, 100, 0.35);
+    color: #1a8a4a;
+  }
+  #status.muted {
+    background: rgba(150, 150, 150, 0.12);
+    border: 1px solid rgba(150, 150, 150, 0.30);
+    color: #777;
+  }
+  #status.error {
+    background: rgba(220, 80, 80, 0.12);
+    border: 1px solid rgba(220, 80, 80, 0.35);
+    color: #c33;
+  }
+  .dot {
+    display: inline-block;
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+  #status.listening .dot { animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.35; transform: scale(0.75); }
+  }
+</style>
+</head>
+<body>
+<div id="status" class="muted"><span class="dot"></span><span id="label">Initializing…</span></div>
+<script>
+// ---------- Streamlit component bridge ----------
+function sendMessageToStreamlitClient(type, data) {
+  window.parent.postMessage(
+    Object.assign({ isStreamlitMessage: true, type: type }, data),
+    "*"
+  );
+}
+function sendValue(value) {
+  sendMessageToStreamlitClient("streamlit:setComponentValue",
+    { value: value, dataType: "json" });
+}
+
+// ---------- UI helpers ----------
+const statusEl = document.getElementById("status");
+const labelEl = document.getElementById("label");
+function setStatus(cls, text) {
+  statusEl.className = cls;
+  labelEl.textContent = text;
+}
+
+// ---------- State ----------
+let recognition = null;
+let isStarted = false;
+let mutedUntilMs = 0;       // wall-clock ms until which we should NOT listen
+let lastSentSerial = 0;     // monotonic counter so Streamlit sees each transcript as new
+let lastMuteForMs = 0;      // dedupe args: only react to NEW mute commands from Python
+
+function shouldBeListening() {
+  return Date.now() >= mutedUntilMs;
+}
+
+// ---------- Recognition lifecycle ----------
+function ensureRecognition() {
+  const Rec = window.webkitSpeechRecognition || window.SpeechRecognition;
+  if (!Rec) {
+    setStatus("error", "Web Speech API unavailable — use Chrome");
+    return null;
+  }
+  if (recognition) return recognition;
+  recognition = new Rec();
+  recognition.continuous = true;
+  recognition.interimResults = false;
+  recognition.lang = "en-US";
+
+  recognition.onresult = (event) => {
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      if (!event.results[i].isFinal) continue;
+      const t = event.results[i][0].transcript.trim();
+      if (!t || !shouldBeListening()) continue;
+      lastSentSerial += 1;
+      sendValue({ transcript: t, serial: lastSentSerial });
+    }
+  };
+  recognition.onerror = (e) => {
+    // 'no-speech' and 'aborted' are routine — let onend restart.
+    if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+      setStatus("error", "Microphone permission denied");
+      isStarted = false;
+    }
+  };
+  recognition.onend = () => {
+    // Web Speech sometimes ends on its own; auto-restart if we're meant to be on.
+    if (isStarted && shouldBeListening()) {
+      setTimeout(() => {
+        if (isStarted && shouldBeListening()) {
+          try { recognition.start(); } catch (e) { /* already started */ }
+        }
+      }, 100);
+    }
+  };
+  return recognition;
+}
+
+function startListening() {
+  const r = ensureRecognition();
+  if (!r) return;
+  isStarted = true;
+  try { r.start(); } catch (e) { /* already started */ }
+  setStatus("listening", "Listening — just speak");
+}
+
+function muteFor(ms) {
+  mutedUntilMs = Date.now() + ms;
+  if (recognition) {
+    try { recognition.stop(); } catch (e) {}
+  }
+  setStatus("muted", "Agent speaking — paused");
+  setTimeout(() => {
+    if (isStarted && shouldBeListening()) {
+      setStatus("listening", "Listening — just speak");
+      try { recognition.start(); } catch (e) {}
+    }
+  }, ms + 250);  // 250ms grace after audio ends to avoid trailing pickup
+}
+
+// ---------- Streamlit render events ----------
+function onRender(event) {
+  if (!event.data || event.data.type !== "streamlit:render") return;
+  const args = event.data.args || {};
+
+  if (args.start === true && !isStarted) {
+    startListening();
+  }
+  // Only react to a NEW mute command from Python (mute_serial is bumped each
+  // time TTS is queued). Without this dedupe, every Streamlit rerun re-applies
+  // the same mute and we'd never start listening again.
+  const ms = args.mute_for_ms || 0;
+  const muteSerial = args.mute_serial || 0;
+  if (ms > 0 && muteSerial !== lastMuteForMs) {
+    lastMuteForMs = muteSerial;
+    muteFor(ms);
+  }
+}
+window.addEventListener("message", onRender);
+
+// ---------- Boot ----------
+sendMessageToStreamlitClient("streamlit:componentReady", { apiVersion: 1 });
+sendMessageToStreamlitClient("streamlit:setFrameHeight", { height: 50 });
+</script>
+</body>
+</html>
