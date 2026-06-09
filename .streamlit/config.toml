@@ -1,0 +1,13 @@
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false
+
+[client]
+# Kiosk display: keep the Streamlit chrome out of the way.
+toolbarMode = "minimal"
+
+[theme]
+base = "light"
+primaryColor = "#e23744"

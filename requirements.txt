@@ -1,0 +1,21 @@
+# Streamlit Community Cloud install for the Highway Bites kiosk.
+#
+# Lean on purpose: only what src/drive_thru/ui/kiosk.py imports at runtime —
+# the LangGraph + OpenAI agent, the SQLite repository, and Piper TTS for spoken
+# replies. The heavier `voice` extras from pyproject.toml (faster-whisper,
+# sounddevice) are intentionally excluded: the kiosk does speech recognition in
+# the browser and only needs Piper on the server. Pinned to the versions the
+# project is developed against so cloud builds are reproducible.
+langgraph==1.2.4
+langchain-openai==1.2.2
+langchain-core==1.4.1
+streamlit==1.58.0
+python-dotenv==1.2.2
+pydantic==2.13.4
+
+# Piper neural TTS (bundles espeak-ng in the wheel; pulls onnxruntime).
+piper-tts==1.4.2
+onnxruntime==1.26.0
+
+# Used directly by drive_thru/voice/tts.py to fetch the Piper voice model.
+huggingface-hub==1.18.0

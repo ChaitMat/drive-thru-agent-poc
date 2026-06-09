@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import io
 import os
+import sys
 import uuid
 import wave
 from pathlib import Path
@@ -31,6 +32,14 @@ import streamlit as st
 import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
+
+# --- deployment bootstrap -------------------------------------------------
+# Streamlit Community Cloud runs this file directly without `pip install`ing the
+# project, so `src/` isn't on sys.path and `import drive_thru` would fail. Add it
+# ourselves. No-op for local runs where the package is installed (pip install -e .).
+_SRC_DIR = Path(__file__).resolve().parents[2]  # .../src
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
 
 from drive_thru.agent.graph import build_graph
 from drive_thru.db import repository as repo
@@ -61,6 +70,42 @@ _DEFAULT_TAB = "Combos"
 load_dotenv()
 
 st.set_page_config(page_title="Highway Bites — Kiosk", layout="wide", page_icon="🍔")
+
+
+def _load_secrets_into_env() -> None:
+    """Mirror Streamlit secrets into os.environ.
+
+    On Streamlit Community Cloud there is no .env file — configuration comes from
+    st.secrets. Copying string secrets into the environment lets every existing
+    os.getenv(...) call site (OPENAI_API_KEY, OPENAI_MODEL, PIPER_VOICE,
+    KIOSK_GREETING) keep working unchanged. `setdefault` means a real environment
+    variable always wins over a secret of the same name.
+    """
+    try:
+        items = list(st.secrets.items())
+    except Exception:
+        return  # no secrets.toml locally; .env / real env vars are used instead
+    for key, value in items:
+        if isinstance(value, str):
+            os.environ.setdefault(key, value)
+
+
+@st.cache_resource
+def _ensure_database() -> str:
+    """Build the seeded SQLite DB on first boot if it's missing.
+
+    data/drive_thru.db is gitignored, so it won't exist on a fresh deploy.
+    @st.cache_resource runs this once per process rather than on every rerun.
+    """
+    from drive_thru.db.init_db import DEFAULT_DB_PATH, init_db
+
+    if not DEFAULT_DB_PATH.exists():
+        init_db(DEFAULT_DB_PATH)
+    return str(DEFAULT_DB_PATH)
+
+
+_load_secrets_into_env()
+_ensure_database()
 
 _DEFAULT_GREETING = "Welcome to Highway Bites! What would you like to have?"
 
@@ -462,6 +507,10 @@ def _render_pre_arrival() -> None:
         "<h1>🍔 Highway Bites</h1>"
         "<p style='color:#888;font-size:18px'>Drive-thru kiosk</p>"
         "<p style='color:#555;margin-top:40px'>Waiting for the next customer…</p>"
+        "<p style='color:#999;font-size:14px;margin-top:24px'>"
+        "🎙️ Voice ordering works in <b>Google Chrome</b> only. "
+        "In other browsers, use the <b>⌨️ Type instead</b> box."
+        "</p>"
         "</div>",
         unsafe_allow_html=True,
     )
